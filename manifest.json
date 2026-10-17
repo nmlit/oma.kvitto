@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "oma.kvitto",
   "name": "Kvitto",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "Niklas",
   "license": "MIT",
   "description": "Textruta och utskrift till Epson TM-T88V.",

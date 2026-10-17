@@ -3,6 +3,9 @@ set -euo pipefail
 
 PRINTER_DEV="${OMA_KVITTO_DEV:-/dev/usb/lp0}"
 PRINTER_CUPS="${OMA_KVITTO_CUPS:-}"
+# OMA_KVITTO_STRECK=0 stänger av de lodräta strecken (ren textutskrift som förut).
+# OMA_KVITTO_OUT=fil skriver ESC/POS-datan till en fil i stället för skrivaren (test).
+# OMA_KVITTO_FONT=sökväg/namn väljer typsnitt för grafikläget (standard: monospace).
 
 text="${1:-}"
 if [[ -z "$text" ]]; then
@@ -11,34 +14,166 @@ if [[ -z "$text" ]]; then
 fi
 
 tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
+work="$(mktemp -d)"
+trap 'rm -f "$tmp"; rm -rf "$work"' EXIT
 
-python3 - "$tmp" "$text" << 'PY'
+magick_bin=""
+if [[ "${OMA_KVITTO_STRECK:-1}" != "0" ]]; then
+  if command -v magick >/dev/null 2>&1; then
+    magick_bin="magick"
+  fi
+fi
+
+font="${OMA_KVITTO_FONT:-}"
+if [[ -n "$magick_bin" && -z "$font" ]] && command -v fc-match >/dev/null 2>&1; then
+  font="$(fc-match -f '%{file}' monospace 2>/dev/null || true)"
+fi
+
+python3 - "$tmp" "$text" "$magick_bin" "$font" "$work" << 'PY'
+import subprocess
 import sys
-out, text = sys.argv[1], sys.argv[2]
-cols = 42
-lines = []
-for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-    if raw == "":
-        lines.append("")
-        continue
-    while len(raw) > cols:
-        lines.append(raw[:cols])
-        raw = raw[cols:]
-    lines.append(raw)
-body = ("\n".join(lines) + "\n").encode("cp1252", "replace")
 
+out, text, magick, font, work = sys.argv[1:6]
+
+INIT = b"\x1b@" + b"\x1b\x52\x05" + b"\x1b\x74\x10"
 # GS V Function B: mata till knivposition + n * (1/360 tum), sedan partial cut.
-# n=213 -> 15 mm extra under sista textraden.
-payload = (
-    b"\x1b@"
-    + b"\x1b\x52\x05"
-    + b"\x1b\x74\x10"
-    + body
-    + b"\x1dV\x42\xd5"
-)
+# n=213 -> 15 mm extra under sista raden.
+CUT = b"\x1dV\x42\xd5"
+
+# TM-T88V, 80 mm papper: 512 punkter bred utskrift, 180 dpi (≈7,09 punkter/mm).
+WIDTH = 512
+DPMM = 180 / 25.4
+BAR_H = round(50 * DPMM)   # 5 cm = 354 punkter
+BAR_W = 20                 # ≈2,8 mm
+GAP = 8                    # ≈1,1 mm luft mellan streck och text
+TEXT_X = BAR_W + GAP
+TEXT_W = WIDTH - 2 * TEXT_X
+POINTSIZE = 20             # ≈ samma storlek som skrivarens Font A (12x24)
+
+
+def wrap(cols):
+    lines = []
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        raw = raw.replace("\t", "    ")
+        if raw == "":
+            lines.append("")
+            continue
+        while len(raw) > cols:
+            lines.append(raw[:cols])
+            raw = raw[cols:]
+        lines.append(raw)
+    return lines
+
+
+def text_payload():
+    body = ("\n".join(wrap(42)) + "\n").encode("cp1252", "replace")
+    return INIT + body + CUT
+
+
+def read_pbm(path):
+    data = open(path, "rb").read()
+    fields, pos = [], 0
+    while len(fields) < 3:
+        while data[pos:pos + 1].isspace():
+            pos += 1
+        if data[pos:pos + 1] == b"#":
+            while data[pos:pos + 1] not in (b"\n", b""):
+                pos += 1
+            continue
+        start = pos
+        while not data[pos:pos + 1].isspace():
+            pos += 1
+        fields.append(data[start:pos])
+    pos += 1
+    if fields[0] != b"P4":
+        raise ValueError("oväntat bildformat")
+    w, h = int(fields[1]), int(fields[2])
+    stride = (w + 7) // 8
+    rows = [int.from_bytes(data[pos + y * stride:pos + (y + 1) * stride], "big") for y in range(h)]
+    # Ta bort utfyllnadsbitar så att varje rad är exakt w bitar.
+    pad = stride * 8 - w
+    rows = [r >> pad for r in rows]
+    return w, h, rows
+
+
+def magick_cmd(*args):
+    cmd = [magick, "-background", "white", "-fill", "black", "+antialias"]
+    if font:
+        cmd += ["-font", font]
+    cmd += ["-pointsize", str(POINTSIZE)] + list(args)
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
+def raster_payload():
+    probe = f"{work}/probe.pbm"
+    magick_cmd("label:" + "M" * 20, "-threshold", "50%", probe)
+    pw, line_h, _ = read_pbm(probe)
+    cols = max(10, (TEXT_W * 20) // pw)
+
+    # En label per rad, staplade med -append. Texten skickas som argument
+    # (inte @fil, som ofta spärras av ImageMagicks policy), så % och \\
+    # escapas och en inledande @ neutraliseras.
+    labels = []
+    for line in wrap(cols):
+        esc = line.replace("\\", "\\\\").replace("%", "%%")
+        # Inledande blanksteg trimmas av ImageMagick; byt mot hårda mellanslag.
+        stripped = esc.lstrip(" ")
+        esc = "\u00a0" * (len(esc) - len(stripped)) + stripped
+        if esc.startswith("@"):
+            esc = "\\" + esc
+        if esc.strip():
+            labels.append("label:" + esc)
+        else:  # tom rad: vit ruta med samma höjd som en textrad
+            labels += ["-size", f"1x{line_h}", "xc:white", "+size"]
+    img = f"{work}/text.pbm"
+    magick_cmd(*labels, "-gravity", "NorthWest", "-append", "-threshold", "50%", img)
+    tw, th, trows = read_pbm(img)
+    if tw > TEXT_W:  # klipp om typsnittet ändå blev för brett
+        trows = [r >> (tw - TEXT_W) for r in trows]
+        tw = TEXT_W
+
+    height = max(BAR_H, th)
+    full = (1 << WIDTH) - 1
+    left_bar = ((1 << BAR_W) - 1) << (WIDTH - BAR_W)
+    right_bar = (1 << BAR_W) - 1
+    text_shift = WIDTH - TEXT_X - tw
+
+    rows = []
+    for y in range(height):
+        r = 0
+        if y < th:
+            r |= trows[y] << text_shift
+        if y < BAR_H:
+            r |= left_bar | right_bar
+        rows.append((r & full).to_bytes(WIDTH // 8, "big"))
+
+    # GS v 0: rasterbild, skickas i band om 128 rader.
+    xb = WIDTH // 8
+    raster = b""
+    for start in range(0, height, 128):
+        band = rows[start:start + 128]
+        n = len(band)
+        raster += b"\x1dv0\x00" + bytes([xb & 0xFF, xb >> 8, n & 0xFF, n >> 8]) + b"".join(band)
+    return INIT + raster + CUT
+
+
+payload = None
+if magick:
+    try:
+        payload = raster_payload()
+    except Exception as exc:
+        err = getattr(exc, "stderr", b"") or b""
+        msg = err.decode("utf-8", "replace").strip() if isinstance(err, bytes) else str(err)
+        print(f"oma.kvitto: grafikläget misslyckades ({msg or exc}), skriver ren text", file=sys.stderr)
+if payload is None:
+    payload = text_payload()
 open(out, "wb").write(payload)
 PY
+
+if [[ -n "${OMA_KVITTO_OUT:-}" ]]; then
+  cp "$tmp" "$OMA_KVITTO_OUT"
+  exit 0
+fi
 
 if [[ -n "$PRINTER_CUPS" ]]; then
   lp -d "$PRINTER_CUPS" -o raw "$tmp"
