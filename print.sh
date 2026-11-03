@@ -51,16 +51,17 @@ POINTSIZE = max(6, min(80, int(float(size or 20))))
 
 
 def wrap(cols):
+    import textwrap
     lines = []
     for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         raw = raw.replace("\t", "    ")
-        if raw == "":
+        if raw.strip() == "":
             lines.append("")
             continue
-        while len(raw) > cols:
-            lines.append(raw[:cols])
-            raw = raw[cols:]
-        lines.append(raw)
+        indent = raw[:len(raw) - len(raw.lstrip(" "))]
+        lines += textwrap.wrap(raw, cols, subsequent_indent=indent,
+                               break_long_words=True, break_on_hyphens=False,
+                               drop_whitespace=True) or [""]
     return lines
 
 
@@ -105,28 +106,35 @@ def magick_cmd(*args):
 
 def raster_payload():
     probe = f"{work}/probe.pbm"
-    magick_cmd("label:" + "M" * 20, "-threshold", "50%", probe)
+    # Mät genomsnittlig teckenbredd på vanlig text (inte bara M), så att
+    # proportionella typsnitt inte bryts för tidigt.
+    sample = "Det här är en helt vanlig mening med åäö, siffror 0123456789."
+    magick_cmd("label:" + sample, "-threshold", "50%", probe)
     pw, line_h, _ = read_pbm(probe)
-    cols = max(10, (TEXT_W * 20) // pw)
+    cols = max(10, int(TEXT_W * len(sample) / pw * 0.95))
 
-    # En label per rad, staplade med -append. Texten skickas som argument
-    # (inte @fil, som ofta spärras av ImageMagicks policy), så % och \\
-    # escapas och en inledande @ neutraliseras.
-    labels = []
-    for line in wrap(cols):
-        esc = line.replace("\\", "\\\\").replace("%", "%%")
-        # Inledande blanksteg trimmas av ImageMagick; byt mot hårda mellanslag.
-        stripped = esc.lstrip(" ")
-        esc = "\u00a0" * (len(esc) - len(stripped)) + stripped
-        if esc.startswith("@"):
-            esc = "\\" + esc
-        if esc.strip():
-            labels.append("label:" + esc)
-        else:  # tom rad: vit ruta med samma höjd som en textrad
-            labels += ["-size", f"1x{line_h}", "xc:white", "+size"]
-    img = f"{work}/text.pbm"
-    magick_cmd(*labels, "-gravity", "NorthWest", "-append", "-threshold", "50%", img)
-    tw, th, trows = read_pbm(img)
+    while True:
+        # En label per rad, staplade med -append. Texten skickas som argument
+        # (inte @fil, som ofta spärras av ImageMagicks policy), så % och \\
+        # escapas och en inledande @ neutraliseras.
+        labels = []
+        for line in wrap(cols):
+            esc = line.replace("\\", "\\\\").replace("%", "%%")
+            # Inledande blanksteg trimmas av ImageMagick; byt mot hårda mellanslag.
+            stripped = esc.lstrip(" ")
+            esc = "\u00a0" * (len(esc) - len(stripped)) + stripped
+            if esc.startswith("@"):
+                esc = "\\" + esc
+            if esc.strip():
+                labels.append("label:" + esc)
+            else:  # tom rad: vit ruta med samma höjd som en textrad
+                labels += ["-size", f"1x{line_h}", "xc:white", "+size"]
+        img = f"{work}/text.pbm"
+        magick_cmd(*labels, "-gravity", "NorthWest", "-append", "-threshold", "50%", img)
+        tw, th, trows = read_pbm(img)
+        if tw <= TEXT_W or cols <= 10:
+            break
+        cols -= 2  # en rad blev för bred: bryt lite tidigare och försök igen
     if tw > TEXT_W:  # klipp om typsnittet ändå blev för brett
         trows = [r >> (tw - TEXT_W) for r in trows]
         tw = TEXT_W

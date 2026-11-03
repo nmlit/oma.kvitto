@@ -48,11 +48,11 @@ Item {
   Process {
     id: fontProc
     running: true
-    command: ["sh", "-c", "fc-list : family | cut -d, -f1 | sort -u"]
+    command: ["sh", "-c", "fc-list :scalable=true family | cut -d, -f1 | sort -u | grep -vE '^Noto (Sans|Serif|Fangsong|Kufi|Naskh|Nastaliq|Rashi|Music|Color|Traditional|Znamenny)' ; fc-list : family | cut -d, -f1 | grep -xE 'Noto (Sans|Sans Mono|Serif)' | sort -u"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        root.fontList = ["monospace"].concat(text.split("\n").filter(function(s) { return s.trim() !== "" }))
+        root.fontList = ["monospace"].concat(text.split("\n").filter(function(s) { return s.trim() !== "" && !/^(Font Awesome|Standard Symbols|D050000L|Z003|omarchy)/.test(s) }).sort())
       }
     }
   }
@@ -220,6 +220,9 @@ Item {
                 if (event.key === Qt.Key_Escape) {
                   root.dismiss()
                   event.accepted = true
+                } else if (event.key === Qt.Key_P && (event.modifiers & Qt.ControlModifier)) {
+                  root.printReceipt()
+                  event.accepted = true
                 }
               }
             }
@@ -233,6 +236,17 @@ Item {
             width: parent.parent.width - 128 - 8
             height: 32
             model: root.fontList
+            palette.button: Qt.tint(root.bg, Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.12))
+            palette.base: Qt.tint(root.bg, Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.08))
+            palette.window: root.bg
+            palette.text: root.fg
+            palette.buttonText: root.fg
+            palette.windowText: root.fg
+            palette.highlight: Qt.tint(root.bg, Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.25))
+            palette.highlightedText: root.fg
+            palette.mid: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.18)
+            palette.light: Qt.tint(root.bg, Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.18))
+            palette.dark: root.bg
             currentIndex: Math.max(0, root.fontList.indexOf(root.printFont))
             onActivated: function(i) { root.printFont = root.fontList[i]; root.saveSettings() }
           }
@@ -241,6 +255,17 @@ Item {
             width: 128
             height: 32
             from: 6
+            palette.button: Qt.tint(root.bg, Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.12))
+            palette.base: Qt.tint(root.bg, Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.08))
+            palette.window: root.bg
+            palette.text: root.fg
+            palette.buttonText: root.fg
+            palette.windowText: root.fg
+            palette.highlight: Qt.tint(root.bg, Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.25))
+            palette.highlightedText: root.fg
+            palette.mid: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.18)
+            palette.light: Qt.tint(root.bg, Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.18))
+            palette.dark: root.bg
             to: 80
             value: root.printSize
             editable: true
