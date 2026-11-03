@@ -24,31 +24,30 @@ if [[ "${OMA_KVITTO_STRECK:-1}" != "0" ]]; then
   fi
 fi
 
-font="${OMA_KVITTO_FONT:-}"
-if [[ -n "$magick_bin" && -z "$font" ]] && command -v fc-match >/dev/null 2>&1; then
-  font="$(fc-match -f '%{file}' monospace 2>/dev/null || true)"
+font="${2:-${OMA_KVITTO_FONT:-}}"
+size="${3:-${OMA_KVITTO_SIZE:-20}}"
+if [[ -n "$magick_bin" ]] && command -v fc-match >/dev/null 2>&1; then
+  font="$(fc-match -f '%{file}' "${font:-monospace}" 2>/dev/null || true)"
 fi
 
-python3 - "$tmp" "$text" "$magick_bin" "$font" "$work" << 'PY'
+python3 - "$tmp" "$text" "$magick_bin" "$font" "$work" "$size" << 'PY'
 import subprocess
 import sys
 
-out, text, magick, font, work = sys.argv[1:6]
+out, text, magick, font, work, size = sys.argv[1:7]
 
 INIT = b"\x1b@" + b"\x1b\x52\x05" + b"\x1b\x74\x10"
 # GS V Function B: mata till knivposition + n * (1/360 tum), sedan partial cut.
 # n=213 -> 15 mm extra under sista raden.
-CUT = b"\x1dV\x42\xd5"
+CUT = b"\x1dV\x42\x00"  # mata till kniven och skär
 
 # TM-T88V, 80 mm papper: 512 punkter bred utskrift, 180 dpi (≈7,09 punkter/mm).
 WIDTH = 512
 DPMM = 180 / 25.4
-BAR_H = round(50 * DPMM)   # 5 cm = 354 punkter
-BAR_W = 20                 # ≈2,8 mm
-GAP = 8                    # ≈1,1 mm luft mellan streck och text
-TEXT_X = BAR_W + GAP
+TAIL = round(10 * DPMM)    # 10 mm tomt efter sista raden
+TEXT_X = 8                 # liten sidomarginal
 TEXT_W = WIDTH - 2 * TEXT_X
-POINTSIZE = 20             # ≈ samma storlek som skrivarens Font A (12x24)
+POINTSIZE = max(6, min(80, int(float(size or 20))))
 
 
 def wrap(cols):
@@ -67,7 +66,7 @@ def wrap(cols):
 
 def text_payload():
     body = ("\n".join(wrap(42)) + "\n").encode("cp1252", "replace")
-    return INIT + body + CUT
+    return INIT + body + b"\x1bJ" + bytes([round(10 / 25.4 * 180)]) + CUT
 
 
 def read_pbm(path):
@@ -132,10 +131,8 @@ def raster_payload():
         trows = [r >> (tw - TEXT_W) for r in trows]
         tw = TEXT_W
 
-    height = max(BAR_H, th)
+    height = max(th + TAIL, round(80 * DPMM))  # minst 80 mm
     full = (1 << WIDTH) - 1
-    left_bar = ((1 << BAR_W) - 1) << (WIDTH - BAR_W)
-    right_bar = (1 << BAR_W) - 1
     text_shift = WIDTH - TEXT_X - tw
 
     rows = []
@@ -143,8 +140,6 @@ def raster_payload():
         r = 0
         if y < th:
             r |= trows[y] << text_shift
-        if y < BAR_H:
-            r |= left_bar | right_bar
         rows.append((r & full).to_bytes(WIDTH // 8, "big"))
 
     # GS v 0: rasterbild, skickas i band om 128 rader.

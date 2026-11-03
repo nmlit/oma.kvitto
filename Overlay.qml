@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -13,11 +14,48 @@ Item {
   property bool opened: false
   property string draft: ""
   property string statusText: ""
+  property string printFont: "monospace"
+  property int printSize: 20
+  property var fontList: ["monospace"]
 
   readonly property string pluginDir: (manifest && manifest.__sourceDir)
     ? String(manifest.__sourceDir)
     : (Quickshell.env("HOME") + "/.config/omarchy/plugins/oma.kvitto")
   readonly property string printScript: pluginDir + "/print.sh"
+  readonly property string settingsFile: Quickshell.env("HOME") + "/.local/state/oma.kvitto/settings.conf"
+
+  function saveSettings() {
+    saveProc.command = ["sh", "-c", 'mkdir -p "$(dirname "$3")" && printf "%s\\n%s\\n" "$1" "$2" > "$3"', "x", root.printFont, String(root.printSize), root.settingsFile]
+    saveProc.running = true
+  }
+
+  Process { id: saveProc }
+
+  Process {
+    id: loadProc
+    running: true
+    command: ["sh", "-c", 'cat "$1" 2>/dev/null', "x", root.settingsFile]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var l = text.split("\n")
+        if (l.length > 0 && l[0].trim() !== "") root.printFont = l[0].trim()
+        if (l.length > 1 && parseInt(l[1]) > 0) root.printSize = parseInt(l[1])
+      }
+    }
+  }
+
+  Process {
+    id: fontProc
+    running: true
+    command: ["sh", "-c", "fc-list : family | cut -d, -f1 | sort -u"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.fontList = ["monospace"].concat(text.split("\n").filter(function(s) { return s.trim() !== "" }))
+      }
+    }
+  }
   readonly property color bg: Color.menu ? Color.menu.background : "#1a1a1a"
   readonly property color fg: Color.menu ? Color.menu.text : "#eeeeee"
   readonly property color scrim: Color.menu && Color.menu.scrim ? Color.menu.scrim : Qt.rgba(0, 0, 0, 0.45)
@@ -54,7 +92,7 @@ Item {
       root.statusText = "Skriv något först."
       return
     }
-    printProc.command = ["bash", root.printScript, t]
+    printProc.command = ["bash", root.printScript, t, root.printFont, String(root.printSize)]
     printProc.running = true
     root.statusText = "Skriver ut…"
   }
@@ -185,6 +223,28 @@ Item {
                 }
               }
             }
+          }
+        }
+
+        Row {
+          spacing: 8
+
+          ComboBox {
+            width: parent.parent.width - 128 - 8
+            height: 32
+            model: root.fontList
+            currentIndex: Math.max(0, root.fontList.indexOf(root.printFont))
+            onActivated: function(i) { root.printFont = root.fontList[i]; root.saveSettings() }
+          }
+
+          SpinBox {
+            width: 128
+            height: 32
+            from: 6
+            to: 80
+            value: root.printSize
+            editable: true
+            onValueModified: { root.printSize = value; root.saveSettings() }
           }
         }
 
