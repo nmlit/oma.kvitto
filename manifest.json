@@ -2,11 +2,14 @@
   "schemaVersion": 1,
   "id": "oma.kvitto",
   "name": "Kvitto",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": "Niklas",
   "license": "MIT",
-  "description": "Textruta och utskrift till Epson TM-T88V.",
-  "kinds": ["overlay", "bar-widget"],
+  "description": "Text och clipboard-bild till Epson TM-T88V, med paketerad Atkinson Hyperlegible.",
+  "kinds": [
+    "overlay",
+    "bar-widget"
+  ],
   "keepLoaded": true,
   "entryPoints": {
     "overlay": "Overlay.qml",

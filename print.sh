@@ -5,10 +5,11 @@ PRINTER_DEV="${OMA_KVITTO_DEV:-/dev/usb/lp0}"
 PRINTER_CUPS="${OMA_KVITTO_CUPS:-}"
 # OMA_KVITTO_STRECK=0 stänger av de lodräta strecken (ren textutskrift som förut).
 # OMA_KVITTO_OUT=fil skriver ESC/POS-datan till en fil i stället för skrivaren (test).
-# OMA_KVITTO_FONT=sökväg/namn väljer typsnitt för grafikläget (standard: monospace).
+# OMA_KVITTO_FONT=sökväg/namn väljer typsnitt för grafikläget (standard: paketerad Atkinson Hyperlegible).
 
 text="${1:-}"
-if [[ -z "$text" ]]; then
+image="${4:-}"
+if [[ -z "$text" && -z "$image" ]]; then
   echo "Ingen text att skriva ut" >&2
   exit 1
 fi
@@ -18,23 +19,40 @@ work="$(mktemp -d)"
 trap 'rm -f "$tmp"; rm -rf "$work"' EXIT
 
 magick_bin=""
-if [[ "${OMA_KVITTO_STRECK:-1}" != "0" ]]; then
+if [[ "${OMA_KVITTO_STRECK:-1}" != "0" || -n "$image" ]]; then
   if command -v magick >/dev/null 2>&1; then
     magick_bin="magick"
   fi
 fi
 
-font="${2:-${OMA_KVITTO_FONT:-}}"
+plugin_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+bundled_font="$plugin_dir/fonts/atkinson-hyperlegible/AtkinsonHyperlegible-Regular.ttf"
+font="${2:-${OMA_KVITTO_FONT:-Atkinson Hyperlegible}}"
 size="${3:-${OMA_KVITTO_SIZE:-20}}"
-if [[ -n "$magick_bin" ]] && command -v fc-match >/dev/null 2>&1; then
-  font="$(fc-match -f '%{file}' "${font:-monospace}" 2>/dev/null || true)"
+if [[ -n "$magick_bin" ]]; then
+  case "$font" in
+    "Atkinson Hyperlegible")
+      # Always use the shipped TTF, even if fontconfig has no system fonts.
+      if [[ ! -r "$bundled_font" ]]; then
+        echo "oma.kvitto: paketerad Atkinson-font saknas; ingen utskrift skickades" >&2
+        exit 1
+      fi
+      font="$bundled_font"
+      ;;
+    *)
+      # Preserve explicit file paths and other installed font choices.
+      if [[ ! -f "$font" ]] && command -v fc-match >/dev/null 2>&1; then
+        font="$(fc-match -f '%{file}' "$font" 2>/dev/null || true)"
+      fi
+      ;;
+  esac
 fi
 
-python3 - "$tmp" "$text" "$magick_bin" "$font" "$work" "$size" << 'PY'
+python3 - "$tmp" "$text" "$magick_bin" "$font" "$work" "$size" "$image" << 'PY'
 import subprocess
 import sys
 
-out, text, magick, font, work, size = sys.argv[1:7]
+out, text, magick, font, work, size, image = sys.argv[1:8]
 
 INIT = b"\x1b@" + b"\x1b\x52\x05" + b"\x1b\x74\x10"
 # GS V Function B: mata till knivposition + n * (1/360 tum), sedan partial cut.
@@ -105,6 +123,8 @@ def magick_cmd(*args):
 
 
 def raster_payload():
+    if not text:
+        return compose_raster(0, 0, [])
     probe = f"{work}/probe.pbm"
     # Mät genomsnittlig teckenbredd på vanlig text (inte bara M), så att
     # proportionella typsnitt inte bryts för tidigt.
@@ -139,7 +159,28 @@ def raster_payload():
         trows = [r >> (tw - TEXT_W) for r in trows]
         tw = TEXT_W
 
-    height = max(th + TAIL, round(80 * DPMM))  # minst 80 mm
+    return compose_raster(tw, th, trows)
+
+
+def compose_raster(tw, th, trows):
+    iw, ih, irows = 0, 0, []
+    if image:
+        img = f"{work}/image.pbm"
+        # Prepared preview is already 512px monochrome; revalidate/re-render
+        # so the public print entry point also enforces white alpha + dithering.
+        subprocess.run([magick, "-limit", "memory", "128MiB",
+                        "-limit", "map", "256MiB", "-limit", "disk", "256MiB",
+                        "-limit", "width", "32768", "-limit", "height", "32768",
+                        "png:" + image + "[0]", "-background", "white",
+                        "-alpha", "remove", "-alpha", "off",
+                        "-resize", "512x", "-colorspace", "Gray",
+                        "-dither", "FloydSteinberg", "-remap", "pattern:gray50", img],
+                       check=True, timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        iw, ih, irows = read_pbm(img)
+        if iw != WIDTH or ih > 16384:
+            raise ValueError("bilden är för hög eller har fel bredd")
+    image_y = th + (8 if th and ih else 0)
+    height = max(image_y + ih + TAIL, round(80 * DPMM))  # minst 80 mm
     full = (1 << WIDTH) - 1
     text_shift = WIDTH - TEXT_X - tw
 
@@ -148,6 +189,8 @@ def raster_payload():
         r = 0
         if y < th:
             r |= trows[y] << text_shift
+        if image_y <= y < image_y + ih:
+            r |= irows[y - image_y] << (WIDTH - iw)
         rows.append((r & full).to_bytes(WIDTH // 8, "big"))
 
     # GS v 0: rasterbild, skickas i band om 128 rader.
@@ -165,10 +208,16 @@ if magick:
     try:
         payload = raster_payload()
     except Exception as exc:
+        if image:
+            print("oma.kvitto: bilden kunde inte renderas; ingen utskrift skickades", file=sys.stderr)
+            sys.exit(1)
         err = getattr(exc, "stderr", b"") or b""
         msg = err.decode("utf-8", "replace").strip() if isinstance(err, bytes) else str(err)
         print(f"oma.kvitto: grafikläget misslyckades ({msg or exc}), skriver ren text", file=sys.stderr)
 if payload is None:
+    if image:
+        print("oma.kvitto: ImageMagick krävs för bilder; ingen utskrift skickades", file=sys.stderr)
+        sys.exit(1)
     payload = text_payload()
 open(out, "wb").write(payload)
 PY

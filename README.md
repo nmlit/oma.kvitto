@@ -61,3 +61,65 @@ Ny session efteråt.
 ```bash
 omarchy plugin remove oma.kvitto
 ```
+
+## Lokalt bildexperiment (2026-11-07)
+
+Ctrl+V eller Shift+Insert i textrutan klistrar in en clipboard-bild (PNG, JPEG, WebP, BMP eller TIFF). Text klistras annars in med Qt:s vanliga textfunktion. En ny bild ersätter föregående bild. Förhandsvisningen visar svartvit Floyd–Steinberg-dithering, 512 px bredd, bibehållna proportioner och vit bakgrund vid transparens. Bilden skrivs efter texten; även enbart bild går bra. **Ta bort bild** tar bort endast bilden; **Rensa** tar bort text och bild. Ctrl+P skriver fortfarande direkt.
+
+Bildutskrift behåller minst 80 mm och sista 10 mm tomma samt befintlig knivmatning. Fel vid bildrendering stoppar utskriften i stället för att tyst utelämna bilden. Bildfiler ligger privat under `$XDG_RUNTIME_DIR/oma.kvitto/images` (reserv: `~/.cache/oma.kvitto/images`), aldrig i pluginmappen. En kvarvarande bildfil efter skalomstart städas av runtime-katalogens livscykel; ingen bild återläses automatiskt. Max 32 MiB clipboard-data och 16384 px höjd efter skalning.
+
+Detta är endast ett lokalt experiment; inget publicerat eller pushat.
+
+## Paketerad Atkinson Hyperlegible (1.3.0)
+
+Originalfamiljen Atkinson Hyperlegible 1.006 ingår som fyra oförändrade TTF-filer
+(Regular, Bold, Italic, BoldItalic). Detta motsvarar familjen i Arch-paketet
+`ttf-atkinson-hyperlegible`, inte Next/Mono. ÅäöÅÄÖ finns i samtliga fyra filer.
+Fontfilerna omfattas av **SIL Open Font License 1.1**, inte pluginets MIT-licens.
+Copyright, fullständig licens, pinnad upstream och SHA-256 finns i
+`fonts/atkinson-hyperlegible/OFL.txt` respektive `SOURCE.md`.
+
+Ingen `sudo pacman`, fontinstallation eller font-cache krävs för denna font.
+`omarchy plugin add` klonar hela repot och behåller fontkatalogen. QML laddar
+TTF-filerna direkt med Qt Quick FontLoader, och utskriftsrenderern använder
+Regular-filens absoluta sökväg i pluginmappen utan fontconfig-uppslagning.
+Andra installerade typsnitt går fortfarande att välja. Editorn och fontvalets
+text visar den valda fonten; utskriftens valda storlek fungerar som tidigare.
+
+Vid nyinstallation utan sparat fontval är Atkinson Hyperlegible standard.
+Ett befintligt explicit fontval och en sparad storlek läses som tidigare och
+skrivs **inte** över vid start eller uppdatering. Inställningar förblir i
+`~/.local/state/oma.kvitto/settings.conf`, utanför pluginmappen. Fontval/storlek
+sparas endast när användaren ändrar dem i gränssnittet.
+
+Aktuellt installationssätt (äldre exempel ovan med `bar plugin add` är föråldrat):
+
+```bash
+omarchy plugin add https://github.com/nmlit/oma.kvitto.git --enable
+```
+
+Uppdatering efter att ändringen finns på standardgrenen:
+
+```bash
+omarchy plugin update oma.kvitto --yes
+omarchy-restart-shell
+```
+
+Font- och bildändringarna kan provas med `OMA_KVITTO_OUT=/tmp/kvitto.bin`
+för att skriva ESC/POS till fil i stället för att öppna skrivaren.
+
+### Reproducerbara torrtester
+
+```bash
+python3 tests/test-renderer.py
+```
+
+Tester använder endast syntetiska data och `OMA_KVITTO_OUT`, aldrig skrivaren
+eller verklig clipboard. De provar även tom fontconfig (inga systemfonter),
+alla fyra lokala QML FontLoader-filer och bevarat explicit fontval/storlek.
+Headless QML-delen kräver Quickshell; övriga tester kräver pluginets befintliga
+verktyg Python 3, ImageMagick och fontconfig. Fontbunten lägger inte till något
+nytt systempaketkrav.
+
+Bildexperimentavsnittets status ovan beskriver det tidigare lokala testskedet.
+Det användarverifierade bildstödet ingår i 1.3.0 tillsammans med fontbunten.
