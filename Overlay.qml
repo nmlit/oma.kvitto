@@ -14,15 +14,26 @@ Item {
   property bool opened: false
   property string draft: ""
   property string statusText: ""
-  property string printFont: "monospace"
+  property string printFont: "Atkinson Hyperlegible"
   property int printSize: 20
-  property var fontList: ["monospace"]
+  property string imagePath: ""
+  property bool pasteBusy: pasteProc.running
+  readonly property string imageHelper: pluginDir + "/clipboard-image.py"
+  property var fontList: ["Atkinson Hyperlegible", "monospace"]
 
   readonly property string pluginDir: (manifest && manifest.__sourceDir)
     ? String(manifest.__sourceDir)
     : (Quickshell.env("HOME") + "/.config/omarchy/plugins/oma.kvitto")
   readonly property string printScript: pluginDir + "/print.sh"
   readonly property string settingsFile: Quickshell.env("HOME") + "/.local/state/oma.kvitto/settings.conf"
+
+  // Application-local font registration. No system installation/font cache needed.
+  FontLoader { id: bundledRegular; source: Qt.resolvedUrl("fonts/atkinson-hyperlegible/AtkinsonHyperlegible-Regular.ttf") }
+  FontLoader { source: Qt.resolvedUrl("fonts/atkinson-hyperlegible/AtkinsonHyperlegible-Bold.ttf") }
+  FontLoader { source: Qt.resolvedUrl("fonts/atkinson-hyperlegible/AtkinsonHyperlegible-Italic.ttf") }
+  FontLoader { source: Qt.resolvedUrl("fonts/atkinson-hyperlegible/AtkinsonHyperlegible-BoldItalic.ttf") }
+  readonly property string selectedEditorFont: root.printFont === "Atkinson Hyperlegible" && bundledRegular.status === FontLoader.Ready
+    ? bundledRegular.name : root.printFont
 
   function saveSettings() {
     saveProc.command = ["sh", "-c", 'mkdir -p "$(dirname "$3")" && printf "%s\\n%s\\n" "$1" "$2" > "$3"', "x", root.printFont, String(root.printSize), root.settingsFile]
@@ -52,7 +63,7 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        root.fontList = ["monospace"].concat(text.split("\n").filter(function(s) { return s.trim() !== "" && !/^(Font Awesome|Standard Symbols|D050000L|Z003|omarchy)/.test(s) }).sort())
+        root.fontList = ["Atkinson Hyperlegible", "monospace"].concat(text.split("\n").filter(function(s) { return s.trim() !== "" && s.trim() !== "Atkinson Hyperlegible" && s.trim() !== "monospace" && !/^(Font Awesome|Standard Symbols|D050000L|Z003|omarchy)/.test(s) }).sort())
       }
     }
   }
@@ -86,13 +97,53 @@ Item {
     else root.open("{}")
   }
 
+  function removeImage() {
+    if (printProc.running || pasteProc.running || removeProc.running) return
+    if (root.imagePath) {
+      removeProc.command = ["python3", root.imageHelper, "--remove", root.imagePath]
+      removeProc.running = true
+      root.imagePath = ""
+    }
+  }
+
+  function pasteClipboard() {
+    if (pasteProc.running || printProc.running || removeProc.running) return
+    pasteProc.command = ["python3", root.imageHelper]
+    pasteProc.running = true
+  }
+
+  Process { id: removeProc }
+  Process {
+    id: pasteProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var result = JSON.parse(text)
+          if (result.kind === "text") {
+            // Qt retains native plain-text paste/selection/undo behaviour.
+            input.paste()
+          } else if (result.kind === "image") {
+            if (root.imagePath) {
+              removeProc.command = ["python3", root.imageHelper, "--remove", root.imagePath]
+              removeProc.running = true
+            }
+            root.imagePath = result.path
+            root.statusText = "Bild klar: 512 px, svartvit. Skrivs efter texten."
+          } else root.statusText = "Kunde inte klistra in bilden (format, storlek eller timeout)."
+        } catch (e) { root.statusText = "Kunde inte klistra in bilden." }
+      }
+    }
+  }
+
   function printReceipt() {
+    if (pasteProc.running || printProc.running) return
     var t = String(root.draft).replace(/\s+$/g, "")
-    if (!t) {
-      root.statusText = "Skriv något först."
+    if (!t && !root.imagePath) {
+      root.statusText = "Skriv något eller klistra in en bild först."
       return
     }
-    printProc.command = ["bash", root.printScript, t, root.printFont, String(root.printSize)]
+    printProc.command = ["bash", root.printScript, t, root.printFont, String(root.printSize), root.imagePath]
     printProc.running = true
     root.statusText = "Skriver ut…"
   }
@@ -199,7 +250,7 @@ Item {
               wrapMode: TextEdit.Wrap
               selectByMouse: true
               color: root.fg
-              font.family: root.fontFamily
+              font.family: root.selectedEditorFont
               font.pixelSize: 14
               textFormat: TextEdit.PlainText
               text: root.draft
@@ -217,7 +268,10 @@ Item {
               }
 
               Keys.onPressed: function(event) {
-                if (event.key === Qt.Key_Escape) {
+                if (event.matches(StandardKey.Paste) || (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier))) {
+                  root.pasteClipboard()
+                  event.accepted = true
+                } else if (event.key === Qt.Key_Escape) {
                   root.dismiss()
                   event.accepted = true
                 } else if (event.key === Qt.Key_P && (event.modifiers & Qt.ControlModifier)) {
@@ -229,10 +283,50 @@ Item {
           }
         }
 
+        Column {
+          width: parent.width
+          spacing: 6
+          visible: root.imagePath !== ""
+          Text {
+            width: parent.width
+            text: "En bild efter texten · 512 px · svartvit"
+            color: root.fg
+            font.pixelSize: 12
+          }
+          Rectangle {
+            width: parent.width
+            height: 140
+            color: "white"
+            radius: 4
+            Image {
+              anchors.fill: parent
+              anchors.margins: 4
+              source: root.imagePath ? "file://" + root.imagePath : ""
+              fillMode: Image.PreserveAspectFit
+              cache: false
+              asynchronous: true
+            }
+          }
+          Button {
+            text: "Ta bort bild"
+            enabled: !root.pasteBusy && !printProc.running && !removeProc.running
+            onClicked: root.removeImage()
+          }
+        }
+
+        Text {
+          width: parent.width
+          text: root.pasteBusy ? "Bearbetar bild…" : "Klistra in text eller bild: Ctrl+V / Shift+Insert"
+          color: root.fg
+          font.pixelSize: 12
+          wrapMode: Text.WordWrap
+        }
+
         Row {
           spacing: 8
 
           ComboBox {
+            font.family: root.selectedEditorFont
             width: parent.parent.width - 128 - 8
             height: 32
             model: root.fontList
@@ -306,6 +400,8 @@ Item {
                 onClicked: {
                   if (modelData.action === "print") root.printReceipt()
                   else if (modelData.action === "clear") {
+                    if (root.pasteBusy || printProc.running || removeProc.running) return
+                    root.removeImage()
                     root.draft = ""
                     root.statusText = ""
                     flick.contentY = 0
