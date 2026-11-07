@@ -1,125 +1,220 @@
 # oma.kvitto
 
-Utskrift till Epson TM-T88V från Omarchy.
+Skriv ut text och en inklistrad bild på Epson TM-T88V från Omarchy.
+Den här dokumentationen beskriver version **1.3.0**.
 
 ## Krav
 
-- Omarchy med `omarchy-shell`
-- Skrivare på `/dev/usb/lp0` (eller CUPS-kö)
-- Användaren i gruppen `lp`
-- ImageMagick (`magick`) för de lodräta strecken (finns normalt i Omarchy, annars `sudo pacman -S imagemagick`)
+- Omarchy med `omarchy-shell`/Quickshell och stöd för plugins.
+- Bash, Python 3 och vanliga Unixverktyg för filer och text, bland annat
+  `mktemp`, `cp`, `rm`, `cat`, `cut`, `sort` och `grep`.
+- **ImageMagick** med kommandot `magick` för normal text- och bildrendering.
+- **wl-clipboard** med `wl-paste` för inklistringens MIME-kontroll och bildhämtning
+  i Wayland-sessionen.
+- **fontconfig** med `fc-list` för listan över installerade fonter och `fc-match`
+  för att hitta andra valda systemfonter.
+- En ansluten skrivare med skrivbar enhetsfil, normalt `/dev/usb/lp0`, eller en
+  konfigurerad CUPS-kö som tar emot rå ESC/POS-data. CUPS-alternativet kräver `lp`.
+
+Atkinson Hyperlegible följer med pluginet: ingen separat installation av
+`ttf-atkinson-hyperlegible`, inget `sudo pacman` och ingen font-cache behövs för
+just den fonten. Git-installationen hämtar hela pluginet inklusive fontfilerna;
+den installerar inte systemverktygen ovan.
+
+### Rättigheter till USB-skrivaren
+
+Vid direkt USB-utskrift måste användaren som kör skalet kunna skriva till den
+valda enheten. Kontrollera enhetens ägare/grupp och dina grupper:
+
+```bash
+ls -l /dev/usb/lp0
+id
+```
+
+Om enheten tillhör gruppen `lp` och gruppen har skrivrättighet kan medlemskap i
+`lp` ge åtkomst:
 
 ```bash
 sudo usermod -aG lp "$USER"
 ```
 
-Logga ut ur sessionen och in igen.
+Logga därefter ut och in igen. Gruppmedlemskap är inte ett universellt krav:
+det är faktisk skrivåtkomst till enheten som behövs. Vid CUPS-utskrift används
+i stället köns åtkomstregler; pluginet öppnar då inte USB-enheten direkt.
 
-## Installera
+## Installera och uppdatera
+
+Installera och aktivera widgeten:
 
 ```bash
 omarchy plugin add https://github.com/nmlit/oma.kvitto.git --enable
-omarchy bar plugin add oma.kvitto --section right
 omarchy-restart-shell
 ```
 
-## Använda
-
-Klicka på **Kvitto** i baren, eller:
-
-```bash
-omarchy-shell shell toggle oma.kvitto '{}'
-```
-
-## Lodräta streck
-
-Kvittot skrivs ut som en bild med ett svart lodrätt streck (5 cm högt, ca 2,8 mm brett) längs vänster och höger kant, med start överst på kvittot. Strecken är alltid 5 cm även om texten är kortare. Texten skrivs i ett monospace-typsnitt, upp till cirka 38 tecken per rad, och å, ä, ö och € fungerar.
-
-Saknas ImageMagick, eller om bildrenderingen misslyckas, skrivs kvittot ut som ren text utan streck, precis som tidigare.
-
-```bash
-# Stäng av strecken (ren text, 42 tecken per rad)
-echo 'export OMA_KVITTO_STRECK=0' > ~/.config/uwsm/env.d/kvitto-streck
-
-# Valfritt: annat typsnitt (standard är systemets monospace)
-echo 'export OMA_KVITTO_FONT=/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf' > ~/.config/uwsm/env.d/kvitto-font
-```
-
-Ny session efteråt. Vill du testa utan att skriva ut sparar `OMA_KVITTO_OUT=/tmp/kvitto.bin ./print.sh "test"` ESC/POS-datan till en fil.
-
-## CUPS
-
-```bash
-lpstat -p -d
-echo 'export OMA_KVITTO_CUPS=KONAMN' > ~/.config/uwsm/env.d/kvitto
-```
-
-Ny session efteråt.
-
-## Ta bort
-
-```bash
-omarchy plugin remove oma.kvitto
-```
-
-## Lokalt bildexperiment (2026-11-07)
-
-Ctrl+V eller Shift+Insert i textrutan klistrar in en clipboard-bild (PNG, JPEG, WebP, BMP eller TIFF). Text klistras annars in med Qt:s vanliga textfunktion. En ny bild ersätter föregående bild. Förhandsvisningen visar svartvit Floyd–Steinberg-dithering, 512 px bredd, bibehållna proportioner och vit bakgrund vid transparens. Bilden skrivs efter texten; även enbart bild går bra. **Ta bort bild** tar bort endast bilden; **Rensa** tar bort text och bild. Ctrl+P skriver fortfarande direkt.
-
-Bildutskrift behåller minst 80 mm och sista 10 mm tomma samt befintlig knivmatning. Fel vid bildrendering stoppar utskriften i stället för att tyst utelämna bilden. Bildfiler ligger privat under `$XDG_RUNTIME_DIR/oma.kvitto/images` (reserv: `~/.cache/oma.kvitto/images`), aldrig i pluginmappen. En kvarvarande bildfil efter skalomstart städas av runtime-katalogens livscykel; ingen bild återläses automatiskt. Max 32 MiB clipboard-data och 16384 px höjd efter skalning.
-
-Detta är endast ett lokalt experiment; inget publicerat eller pushat.
-
-## Paketerad Atkinson Hyperlegible (1.3.0)
-
-Originalfamiljen Atkinson Hyperlegible 1.006 ingår som fyra oförändrade TTF-filer
-(Regular, Bold, Italic, BoldItalic). Detta motsvarar familjen i Arch-paketet
-`ttf-atkinson-hyperlegible`, inte Next/Mono. ÅäöÅÄÖ finns i samtliga fyra filer.
-Fontfilerna omfattas av **SIL Open Font License 1.1**, inte pluginets MIT-licens.
-Copyright, fullständig licens, pinnad upstream och SHA-256 finns i
-`fonts/atkinson-hyperlegible/OFL.txt` respektive `SOURCE.md`.
-
-Ingen `sudo pacman`, fontinstallation eller font-cache krävs för denna font.
-`omarchy plugin add` klonar hela repot och behåller fontkatalogen. QML laddar
-TTF-filerna direkt med Qt Quick FontLoader, och utskriftsrenderern använder
-Regular-filens absoluta sökväg i pluginmappen utan fontconfig-uppslagning.
-Andra installerade typsnitt går fortfarande att välja. Editorn och fontvalets
-text visar den valda fonten; utskriftens valda storlek fungerar som tidigare.
-
-Vid nyinstallation utan sparat fontval är Atkinson Hyperlegible standard.
-Ett befintligt explicit fontval och en sparad storlek läses som tidigare och
-skrivs **inte** över vid start eller uppdatering. Inställningar förblir i
-`~/.local/state/oma.kvitto/settings.conf`, utanför pluginmappen. Fontval/storlek
-sparas endast när användaren ändrar dem i gränssnittet.
-
-Aktuellt installationssätt (äldre exempel ovan med `bar plugin add` är föråldrat):
-
-```bash
-omarchy plugin add https://github.com/nmlit/oma.kvitto.git --enable
-```
-
-Uppdatering efter att ändringen finns på standardgrenen:
+Uppdatera en befintlig installation:
 
 ```bash
 omarchy plugin update oma.kvitto --yes
 omarchy-restart-shell
 ```
 
-Font- och bildändringarna kan provas med `OMA_KVITTO_OUT=/tmp/kvitto.bin`
-för att skriva ESC/POS till fil i stället för att öppna skrivaren.
+## Användning
 
-### Reproducerbara torrtester
+Klicka på **Kvitto** i baren, eller öppna/stäng fönstret med:
+
+```bash
+omarchy-shell shell toggle oma.kvitto '{}'
+```
+
+1. Skriv eller klistra in vanlig text i textrutan.
+2. Välj utskriftsfont och storlek **6–80**.
+3. Klistra vid behov in en bild med **Ctrl+V** eller **Shift+Insert** när
+   textrutan har fokus.
+4. Klicka **Skriv ut**, eller tryck **Ctrl+P** i textrutan för direktutskrift
+   utan ytterligare bekräftelseruta.
+
+**Ta bort bild** tar bort bara bilden. **Rensa** tömmer både text och bild.
+**Stäng** eller **Esc** stänger fönstret utan att rensa utkastet; utkastet är
+inte permanent sparat och återställs inte efter skalomstart.
+
+### Bilder
+
+- Högst **en bild** åt gången; en ny inklistrad bild ersätter den föregående.
+- Bilden skrivs **efter texten**. Det går även att skriva ut enbart bilden.
+- Förhandsvisningen visar den bearbetade svartvita bilden, anpassad till
+  förhandsvisningsrutan utan att ändra proportionerna.
+- Bilden skalas till **512 px bredd**, med bibehållna proportioner. Transparens
+  läggs på vit bakgrund och gråtoner omvandlas med **Floyd–Steinberg-dithering**.
+- Clipboard-formaten PNG, JPEG, WebP, BMP och TIFF stöds. För flerbildsformat
+  används första bilden. Utan ett sådant bildformat används Qt:s vanliga
+  textinklistrning.
+- Högst **32 MiB** hämtad bilddata och **16384 px höjd** efter skalning tillåts.
+  Bildhämtning och konvertering har även tids- och resursgränser.
+- Vid inklistringsfel visas ett fel och ingen ny bild läggs till. Om en vald
+  bild inte kan renderas vid utskrift stoppas utskriften; bilden utelämnas inte
+  tyst till förmån för enbart text.
+
+## Utskriftsformat
+
+Normalutskriften renderar text och eventuell bild till ett svartvitt ESC/POS-
+raster, anpassat till TM-T88V med 80 mm papper. Rasterbredden är **512 punkter**;
+koden räknar med **180 dpi**. Texten har en liten sidomarginal och radbryts efter
+fontens uppmätta teckenbredd, inte ett fast antal tecken per rad.
+
+Den renderade rasterytan är **minst 80 mm** lång. De sista **minst 10 mm** är
+vita efter allt innehåll, även efter en bild. Därefter skickas kommandot
+`GS V B 0`, som matar fram till knivpositionen och gör en partiell skärning.
+Knivmatningen tillkommer utöver rasterytan; måttet är inte ett löfte om exakt
+fysisk längd på den avskurna pappersbiten.
+
+Inga dekorativa sidostreck eller extra dekorationspunkter genereras.
+
+### Reservläge för enbart text
+
+Om ImageMagick saknas eller normal textrendering misslyckas kan en utskrift
+**utan bild** falla tillbaka till skrivarens inbyggda textläge: radbrytning vid
+42 tecken, Windows-1252-kodning och cirka 10 mm avslutande matning före
+knivkommandot. Tecken som inte kan kodas ersätts. I detta läge används inte den
+valda TTF-fonten/storleken och **80 mm minimilängd garanteras inte**.
+
+Miljövariabeln `OMA_KVITTO_STRECK=0` är ett äldre namn som fortfarande väljer
+detta textläge för utskrifter utan bild. Den styr inte några sidostreck.
+En vald bild kräver alltid ImageMagick och använder rasterläget.
+
+## Typsnitt och sparade inställningar
+
+Vid nyinstallation utan sparade val är standarden **Atkinson Hyperlegible**
+och utskriftsstorlek **20**. Storleken kan väljas mellan 6 och 80; renderern
+begränsar också värdet till det intervallet. Textfältet visar vald font med
+fast visningsstorlek 14 px och är inte en skalenlig förhandsvisning av textens
+utskriftsstorlek.
+
+Originalfamiljen Atkinson Hyperlegible **1.006** ingår som fyra oförändrade TTF-
+filer: Regular, Bold, Italic och BoldItalic. Detta är familjen i Arch-paketet
+`ttf-atkinson-hyperlegible`, inte Next eller Mono. ÅäöÅÄÖ finns i alla fyra filer.
+Qt Quick `FontLoader` registrerar filerna lokalt i programmet; renderern använder
+Regular-filens sökväg direkt. Andra installerade fonter kan fortfarande väljas.
+
+Fontval och storlek sparas när de ändras i gränssnittet, utanför pluginmappen:
+
+```text
+~/.local/state/oma.kvitto/settings.conf
+```
+
+Ett redan sparat explicit fontval och en sparad storlek läses vid start och
+skrivs **inte över** av nyinstallationsstandarden vid start eller uppdatering.
+
+## Skrivarmål och miljövariabler
+
+| Variabel | Betydelse |
+| --- | --- |
+| `OMA_KVITTO_DEV` | Enhetsfil för direktutskrift. Standard: `/dev/usb/lp0`. |
+| `OMA_KVITTO_CUPS` | Namn på CUPS-kö. Om satt används `lp -d KÖ -o raw` i stället för enhetsfilen. |
+| `OMA_KVITTO_OUT` | Skriv ESC/POS-data till angiven fil i stället för till CUPS eller USB-enheten. |
+| `OMA_KVITTO_FONT` | Standardfont vid direkt körning av `print.sh` utan fontargument; fontnamn eller filsökväg. Standard: bundled Atkinson Hyperlegible. |
+| `OMA_KVITTO_SIZE` | Standardstorlek vid direkt körning av `print.sh` utan storleksargument. Standard: 20. |
+| `OMA_KVITTO_STRECK` | Äldre textlägesval; se reservläget ovan. |
+
+Gränssnittet skickar sitt valda fontnamn och sin storlek som argument till
+renderern; dessa har företräde framför motsvarande miljövariabler. CUPS-kön
+måste redan vara konfigurerad för skrivaren och kunna hantera rå ESC/POS-data.
+
+Variabler för pluginets vanliga utskrifter måste finnas i **omarchy-shells
+miljö**. En `export` i en separat terminal ändrar inte ett redan körande skal.
+Använd din sessionskonfiguration för bestående miljöval och starta en ny
+session så att de ärvs.
+
+## Lokala bildfiler
+
+Bearbetade bilder ligger privat i `$XDG_RUNTIME_DIR/oma.kvitto/images`, med
+`~/.cache/oma.kvitto/images` som reserv om runtime-variabeln saknas. De ligger
+aldrig i pluginmappen. Ersättning eller borttagning av en bild rensar dess
+bildkatalog. Restfiler efter en skalomstart kan finnas kvar tills runtime-
+katalogen städas; reservkatalogen har ingen motsvarande automatisk städgaranti.
+Ingen bild återläses automatiskt efter omstart.
+
+## Testa utan att skriva ut
+
+Från pluginmappen kan en syntetisk text renderas till en tillfällig fil:
+
+```bash
+out="$(mktemp /tmp/oma-kvitto.XXXXXX.bin)"
+OMA_KVITTO_OUT="$out" bash ./print.sh 'Test: ÅÄÖ åäö'
+printf 'ESC/POS-data sparad i %s\n' "$out"
+```
+
+När `OMA_KVITTO_OUT` är satt skickas inget till skrivaren. Filen innehåller
+binär ESC/POS-data, inte en vanlig bild eller textfil.
+
+Kör de automatiska syntetiska testerna från pluginmappen:
 
 ```bash
 python3 tests/test-renderer.py
 ```
 
-Tester använder endast syntetiska data och `OMA_KVITTO_OUT`, aldrig skrivaren
-eller verklig clipboard. De provar även tom fontconfig (inga systemfonter),
-alla fyra lokala QML FontLoader-filer och bevarat explicit fontval/storlek.
-Headless QML-delen kräver Quickshell; övriga tester kräver pluginets befintliga
-verktyg Python 3, ImageMagick och fontconfig. Fontbunten lägger inte till något
-nytt systempaketkrav.
+Testerna använder filutdata och mockad clipboard, inte skrivaren eller den
+verkliga clipboarden. De kontrollerar bland annat fontfiler/licens, rendering
+utan systemfonter, text/bild, rasterlängd, vit avslutning och knivkommando.
+Headless QML-tester av FontLoader och sparade val kräver Quickshell; den delen
+hoppas över om programmet saknas.
 
-Bildexperimentavsnittets status ovan beskriver det tidigare lokala testskedet.
-Det användarverifierade bildstödet ingår i 1.3.0 tillsammans med fontbunten.
+## Avinstallera
+
+```bash
+omarchy plugin remove oma.kvitto
+```
+
+## Licens och attribution
+
+Pluginets kod: **MIT**, copyright © 2026 Niklas; se [LICENSE](LICENSE).
+
+Medföljande Atkinson Hyperlegible: **SIL Open Font License 1.1**, copyright
+2020 Braille Institute of America, Inc. Fontfilerna omfattas inte av pluginets
+MIT-licens. Fullständig licens finns i
+[fonts/atkinson-hyperlegible/OFL.txt](fonts/atkinson-hyperlegible/OFL.txt).
+Pinnad upstream, källadresser och SHA-256 finns i
+[fonts/atkinson-hyperlegible/SOURCE.md](fonts/atkinson-hyperlegible/SOURCE.md).
+
+- [Upstream: googlefonts/atkinson-hyperlegible](https://github.com/googlefonts/atkinson-hyperlegible)
+- [Braille Institute: Atkinson Hyperlegible](https://www.brailleinstitute.org/freefont/)
+- [Arch-paketet ttf-atkinson-hyperlegible](https://archlinux.org/packages/extra/any/ttf-atkinson-hyperlegible/)
